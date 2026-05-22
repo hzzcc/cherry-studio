@@ -150,6 +150,60 @@ export function isMiMoOfficialHost(host: string | undefined): boolean {
   }
 }
 
+const pad2 = (value: number) => String(value).padStart(2, '0')
+
+/** RFC3339 timestamp in the system local timezone (includes numeric offset). */
+export function formatRfc3339WithLocalOffset(date: Date): string {
+  const offsetMinutes = -date.getTimezoneOffset()
+  const sign = offsetMinutes >= 0 ? '+' : '-'
+  const abs = Math.abs(offsetMinutes)
+  const offset = `${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`
+  return (
+    `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}` +
+    `T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}${offset}`
+  )
+}
+
+/**
+ * Clock context for system prompts — uses the OS timezone (e.g. Asia/Shanghai).
+ */
+export type ChannelContextInput = {
+  channelId: string
+  channelType: string
+  chatId?: string
+}
+
+export function buildChannelContext(channel: ChannelContextInput): string {
+  const lines = [
+    '## Current Channel',
+    `- You are in an external messaging channel: **${channel.channelType}**.`,
+    `- Channel ID: \`${channel.channelId}\` (use for \`mcp__claw__cron\` / \`mcp__claw__notify\` when needed).`
+  ]
+  if (channel.chatId) {
+    lines.push(`- Chat ID: \`${channel.chatId}\` (this conversation).`)
+  }
+  lines.push(
+    '- The user is messaging you through this channel — not the Cherry Studio desktop chat.',
+    `- When creating scheduled tasks with \`mcp__claw__cron\`, set \`channel_ids\` to [\`${channel.channelId}\`] (this channel).`,
+    '- When sending proactive updates with `mcp__claw__notify`, prefer this channel unless the user asks otherwise.'
+  )
+  return lines.join('\n')
+}
+
+export function buildCurrentTimeContext(now: Date = new Date()): string {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone }).format(now)
+  const localRfc3339 = formatRfc3339WithLocalOffset(now)
+
+  return [
+    '## Current Time',
+    `- Now (local): ${localRfc3339} (${weekday})`,
+    `- Timezone: ${timeZone}`,
+    `- Now (UTC): ${now.toISOString()}`,
+    '- For one-time `mcp__claw__cron` `at` values, use the local timestamp above (with offset).'
+  ].join('\n')
+}
+
 export function with1mContextSuffix(modelId: string | undefined, anthropicHost: string | undefined): string {
   if (!modelId) return ''
   if (/\[1m\]$/i.test(modelId)) return modelId

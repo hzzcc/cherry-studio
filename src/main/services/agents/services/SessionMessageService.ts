@@ -14,7 +14,7 @@ import { and, desc, eq, not } from 'drizzle-orm'
 import { BaseService } from '../BaseService'
 import { sessionMessagesTable } from '../database/schema'
 import { agentMessageRepository } from '../database/sessionMessageRepository'
-import type { AgentStreamEvent } from '../interfaces/AgentStreamInterface'
+import type { AgentChannelContext, AgentStreamEvent } from '../interfaces/AgentStreamInterface'
 import ClaudeCodeService from './claudecode'
 
 const claudeCodeService = new ClaudeCodeService()
@@ -36,6 +36,8 @@ export type CreateMessageOptions = {
   displayContent?: string
   /** Images to persist in the user message for UI display (not sent to AI model). */
   images?: Array<{ data: string; media_type: string }>
+  /** External channel driving this message (WeChat, Telegram, etc.). */
+  channel?: AgentChannelContext
 }
 
 // Ensure errors emitted through SSE are serializable
@@ -193,7 +195,8 @@ export class SessionMessageService extends BaseService {
         effort: req.effort,
         thinking: req.thinking
       },
-      undefined
+      undefined,
+      options?.channel
     )
     const accumulator = new TextStreamAccumulator()
 

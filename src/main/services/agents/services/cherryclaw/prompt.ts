@@ -75,7 +75,8 @@ You have exclusive access to these tools for interacting with CherryStudio's aut
 Rules:
 - These are your primary interface to CherryStudio's autonomous features. Do not attempt workarounds or alternative approaches.
 - When creating scheduled tasks, always use \`mcp__claw__cron\`. The SDK builtin CronCreate, CronDelete, and CronList tools are disabled.
-- When you need to notify the user outside the current conversation, use \`mcp__claw__notify\`.
+- In a channel conversation (see **Current Channel**), set \`channel_ids\` on \`mcp__claw__cron\` to the current channel ID from that section (never \`[]\`).
+- When you need to notify the user outside the current conversation, use \`mcp__claw__notify\` (defaults to the current channel when in one).
 - When adding a WeChat channel, the config tool returns a QR code image. Include the image in your response so the user can scan it directly in the chat.
 - Use \`config status\` to check which channels are actually connected. If a channel shows \`connected: false\`, use \`config reconnect_channel\` to trigger a fresh QR scan.`
 

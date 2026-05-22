@@ -236,7 +236,7 @@ export class ChannelMessageHandler {
         textWithAttachments += `\n\n[Attached files saved to workspace]\n${filePaths.map((p) => `- ${p}`).join('\n')}`
       }
 
-      // Wrap untrusted channel input with security boundary markers
+      // Normalize channel input (strip invisible chars, etc.)
       const securedContent = wrapExternalContent(textWithAttachments, {
         chatId: message.chatId,
         userId: message.userId,
@@ -577,7 +577,16 @@ export class ChannelMessageHandler {
       session,
       { content },
       abortController,
-      { persist: !rendererIsWatching, displayContent, images }
+      {
+        persist: !rendererIsWatching,
+        displayContent,
+        images,
+        channel: {
+          channelId: adapter.channelId,
+          channelType: adapter.channelType,
+          chatId
+        }
+      }
     )
 
     const reader = stream.getReader()

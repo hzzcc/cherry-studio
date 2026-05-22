@@ -28,6 +28,13 @@ export interface AgentThinkingOptions {
   thinking?: Options['thinking']
 }
 
+/** Active external channel when the session is driven by a messaging adapter. */
+export type AgentChannelContext = {
+  channelId: string
+  channelType: string
+  chatId?: string
+}
+
 // Base agent service interface
 export interface AgentServiceInterface {
   invoke(
@@ -36,6 +43,7 @@ export interface AgentServiceInterface {
     abortController: AbortController,
     lastAgentSessionId?: string,
     thinkingOptions?: AgentThinkingOptions,
-    images?: Array<{ data: string; media_type: string }>
+    images?: Array<{ data: string; media_type: string }>,
+    channelContext?: AgentChannelContext
   ): Promise<AgentStream>
 }

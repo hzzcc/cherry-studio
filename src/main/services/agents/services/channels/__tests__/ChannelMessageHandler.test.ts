@@ -242,7 +242,16 @@ describe('ChannelMessageHandler', () => {
       session,
       { content: '/compact' },
       expect.any(AbortController),
-      { persist: true }
+      {
+        persist: true,
+        displayContent: undefined,
+        images: undefined,
+        channel: {
+          channelId: 'channel-1',
+          channelType: 'telegram',
+          chatId: 'chat-1'
+        }
+      }
     )
     expect(adapter.sendMessage).toHaveBeenCalledWith('chat-1', 'Compacted.')
   })

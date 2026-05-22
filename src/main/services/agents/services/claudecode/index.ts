@@ -36,17 +36,14 @@ import { toAsarUnpackedPath } from '@main/utils'
 import { autoDiscoverGitBash, getBinaryPath } from '@main/utils/process'
 import { rtkRewrite } from '@main/utils/rtk'
 import getLoginShellEnvironment from '@main/utils/shell-env'
-import {
-  CHANNEL_SECURITY_PROMPT,
-  GLOBALLY_DISALLOWED_TOOLS,
-  SOUL_MODE_DISALLOWED_TOOLS
-} from '@shared/agents/claudecode/constants'
+import { GLOBALLY_DISALLOWED_TOOLS, SOUL_MODE_DISALLOWED_TOOLS } from '@shared/agents/claudecode/constants'
 import { languageEnglishNameMap } from '@shared/config/languages'
 import { withoutTrailingApiVersion } from '@shared/utils'
 import { app } from 'electron'
 
 import type { GetAgentSessionResponse } from '../..'
 import type {
+  AgentChannelContext,
   AgentServiceInterface,
   AgentStream,
   AgentStreamEvent,
@@ -55,13 +52,12 @@ import type {
 import { skillService } from '../../skills/SkillService'
 import { agentService } from '../AgentService'
 import { isProvisioned, provisionBuiltinAgent } from '../builtin/BuiltinAgentProvisioner'
-import { channelService } from '../ChannelService'
 import { PromptBuilder } from '../cherryclaw/prompt'
 import { sessionService } from '../SessionService'
 import { buildNamespacedToolCallId } from './claude-stream-state'
 import { promptForToolApproval } from './tool-permissions'
 import { ClaudeStreamState, transformSDKMessageToStreamParts } from './transform'
-import { with1mContextSuffix } from './utils'
+import { buildChannelContext, buildCurrentTimeContext, with1mContextSuffix } from './utils'
 
 const require_ = createRequire(import.meta.url)
 const logger = loggerService.withContext('ClaudeCodeService')
@@ -114,7 +110,8 @@ class ClaudeCodeService implements AgentServiceInterface {
     abortController: AbortController,
     lastAgentSessionId?: string,
     thinkingOptions?: AgentThinkingOptions,
-    images?: Array<{ data: string; media_type: string }>
+    images?: Array<{ data: string; media_type: string }>,
+    channelContext?: AgentChannelContext
   ): Promise<AgentStream> {
     const aiStream = new ClaudeCodeStream()
 
@@ -431,11 +428,6 @@ class ClaudeCodeService implements AgentServiceInterface {
       logger.info('Built Soul Mode system prompt', { cwd, promptLength: soulSystemPrompt.length })
     }
 
-    // Inject channel security policy into system prompt when session is from an external channel
-    const linkedChannel = await channelService.findBySessionId(session.id)
-    const isChannelSession = !!linkedChannel
-    const channelSecurityBlock = isChannelSession ? `\n\n${CHANNEL_SECURITY_PROMPT}` : ''
-
     // Built-in agent mode: check builtin_role in configuration
     const builtinRole = (session.configuration as Record<string, unknown> | undefined)?.builtin_role as
       | string
@@ -477,6 +469,10 @@ class ClaudeCodeService implements AgentServiceInterface {
         assistantSystemPrompt = session.instructions
       }
     }
+
+    const currentTimeContext = buildCurrentTimeContext()
+    const channelContextBlock = channelContext ? buildChannelContext(channelContext) : ''
+    const environmentAppend = [channelContextBlock, currentTimeContext].filter(Boolean).join('\n\n')
 
     // Build SDK options from session configuration
     const options: Options = {
@@ -525,13 +521,13 @@ class ClaudeCodeService implements AgentServiceInterface {
       systemPrompt: assistantSystemPrompt
         ? assistantSystemPrompt
         : soulSystemPrompt
-          ? `${soulSystemPrompt}${session.instructions ? `\n\n${session.instructions}` : ''}${channelSecurityBlock}\n\n${getLanguageInstruction()}`
+          ? `${soulSystemPrompt}${session.instructions ? `\n\n${session.instructions}` : ''}\n\n${environmentAppend}\n\n${getLanguageInstruction()}`
           : {
               type: 'preset',
               preset: 'claude_code',
               append:
                 [nonSoulToolGuidance, nonSoulFactsRecall, session.instructions].filter(Boolean).join('\n\n') +
-                `${channelSecurityBlock}\n\n${getLanguageInstruction()}`
+                `\n\n${environmentAppend}\n\n${getLanguageInstruction()}`
             },
       // Built-in agents skip CLAUDE.md loading to save tokens
       settingSources: builtinRole ? [] : ['project', 'local'],
@@ -622,9 +618,8 @@ class ClaudeCodeService implements AgentServiceInterface {
     }
 
     if (soulEnabled) {
-      // Find the channel that owns this session (if any) for context-aware cron defaults
-      const sourceChannelId = await this.resolveSourceChannel(session.agent_id, session.id)
-      const clawServer = new ClawServer(session.agent_id, sourceChannelId)
+      const clawSource = await this.resolveChannelContext(channelContext, session.agent_id, session.id)
+      const clawServer = new ClawServer(session.agent_id, clawSource)
       options.mcpServers.claw = { type: 'sdk', name: 'claw', instance: clawServer.mcpServer }
 
       // Auto-approve claw MCP tools at both layers (see skills/memory above
@@ -716,11 +711,19 @@ class ClaudeCodeService implements AgentServiceInterface {
     return aiStream
   }
 
-  private async resolveSourceChannel(agentId: string, sessionId: string): Promise<string | undefined> {
+  private async resolveChannelContext(
+    explicit: AgentChannelContext | undefined,
+    agentId: string,
+    sessionId: string
+  ): Promise<AgentChannelContext | undefined> {
+    if (explicit) return explicit
     try {
       const { channelService } = await import('../ChannelService')
-      const channels = await channelService.listChannels({ agentId })
-      return channels.find((ch) => ch.sessionId === sessionId)?.id
+      const channel = await channelService.findBySessionId(sessionId)
+      if (channel?.agentId === agentId) {
+        return { channelId: channel.id, channelType: channel.type }
+      }
+      return undefined
     } catch {
       return undefined
     }
@@ -1112,6 +1115,8 @@ async function buildAssistantContext(): Promise<string> {
     proxy ? `- Proxy: ${proxy}` : '- Proxy: none',
     `- Providers (${configuredProviders.length}): ${configuredProviders.join(', ') || 'none configured'}`,
     `- MCP Servers: ${activeMcp.length} active / ${mcpServers.length} total`,
+    '',
+    buildCurrentTimeContext(),
     '',
     '## Network',
     ...networkLines

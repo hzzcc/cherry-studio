@@ -67,8 +67,8 @@ vi.mock('@main/services/WindowService', () => ({
 const { default: ClawServer } = await import('../claw')
 type ClawServerInstance = InstanceType<typeof ClawServer>
 
-function createServer(agentId = 'agent_test') {
-  return new ClawServer(agentId)
+function createServer(agentId = 'agent_test', source?: { channelId: string; channelType: string; chatId?: string }) {
+  return new ClawServer(agentId, source)
 }
 
 // Helper to call tools via the Server's request handlers
@@ -165,6 +165,65 @@ describe('ClawServer', () => {
         expect.objectContaining({
           schedule_type: 'interval',
           schedule_value: '90'
+        })
+      )
+    })
+
+    it('should default channel_ids to the current channel when source is set', async () => {
+      mockCreateTask.mockResolvedValue({ id: 'task_ch' })
+
+      const server = createServer('agent_1', { channelId: 'ch_wechat', channelType: 'wechat', chatId: 'wx_123' })
+      await callTool(server, {
+        action: 'add',
+        name: 'Reminder',
+        message: 'Check weather',
+        at: '2026-05-22T08:00:00+08:00'
+      })
+
+      expect(mockCreateTask).toHaveBeenCalledWith(
+        'agent_1',
+        expect.objectContaining({
+          channel_ids: ['ch_wechat']
+        })
+      )
+    })
+
+    it('should force current channel when model passes other channel_ids', async () => {
+      mockCreateTask.mockResolvedValue({ id: 'task_force_ch', channel_ids: ['ch_wechat'] })
+
+      const server = createServer('agent_1', { channelId: 'ch_wechat', channelType: 'wechat' })
+      await callTool(server, {
+        action: 'add',
+        name: 'Reminder',
+        message: 'Ping',
+        every: '5m',
+        channel_ids: ['ch_other']
+      })
+
+      expect(mockCreateTask).toHaveBeenCalledWith(
+        'agent_1',
+        expect.objectContaining({
+          channel_ids: ['ch_wechat']
+        })
+      )
+    })
+
+    it('should treat empty channel_ids as current channel when source is set', async () => {
+      mockCreateTask.mockResolvedValue({ id: 'task_default_ch' })
+
+      const server = createServer('agent_1', { channelId: 'ch_wechat', channelType: 'wechat' })
+      await callTool(server, {
+        action: 'add',
+        name: 'Reminder',
+        message: 'Ping',
+        every: '5m',
+        channel_ids: []
+      })
+
+      expect(mockCreateTask).toHaveBeenCalledWith(
+        'agent_1',
+        expect.objectContaining({
+          channel_ids: ['ch_wechat']
         })
       )
     })
@@ -279,6 +338,25 @@ describe('ClawServer', () => {
       expect(mockSendMessage).toHaveBeenCalledWith('100', 'Hello user!')
       expect(mockSendMessage).toHaveBeenCalledWith('200', 'Hello user!')
       expect(result.content[0].text).toContain('2 chat(s)')
+    })
+
+    it('should default to source channel when channel_id is omitted', async () => {
+      mockSendMessage.mockResolvedValue(undefined)
+      mockGetNotifyAdapters.mockReturnValue([
+        makeAdapter('ch_wechat', ['wx_1', 'wx_2']),
+        makeAdapter('ch_telegram', ['tg_1'])
+      ])
+
+      const server = createServer('agent_1', {
+        channelId: 'ch_wechat',
+        channelType: 'wechat',
+        chatId: 'wx_1'
+      })
+      const result = await callTool(server, { message: 'Ping' }, 'notify')
+
+      expect(mockSendMessage).toHaveBeenCalledTimes(1)
+      expect(mockSendMessage).toHaveBeenCalledWith('wx_1', 'Ping')
+      expect(result.content[0].text).toContain('1 chat(s)')
     })
 
     it('should filter by channel_id when provided', async () => {

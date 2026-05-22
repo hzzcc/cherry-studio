@@ -12,6 +12,12 @@ import QRCode from 'qrcode'
 
 const logger = loggerService.withContext('MCPServer:Claw')
 
+export type ClawSourceContext = {
+  channelId: string
+  channelType: string
+  chatId?: string
+}
+
 /**
  * Parse a human-friendly duration string (e.g. '30m', '2h', '1h30m') into minutes.
  */
@@ -30,6 +36,33 @@ function parseDurationToMinutes(duration: string): number {
   }
 
   return totalMinutes
+}
+
+function buildCronTool(source?: ClawSourceContext): Tool {
+  if (!source?.channelId) {
+    return CRON_TOOL
+  }
+
+  const baseSchema = CRON_TOOL.inputSchema as {
+    type: 'object'
+    properties: Record<string, unknown>
+    required: string[]
+  }
+
+  return {
+    ...CRON_TOOL,
+    inputSchema: {
+      ...baseSchema,
+      properties: {
+        ...baseSchema.properties,
+        channel_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: `Channel IDs for delivery. In this session use exactly: ["${source.channelId}"] (current ${source.channelType} channel).`
+        }
+      }
+    }
+  }
 }
 
 const CRON_TOOL: Tool = {
@@ -68,8 +101,7 @@ const CRON_TOOL: Tool = {
       channel_ids: {
         type: 'array',
         items: { type: 'string' },
-        description:
-          'Channel IDs to send task results to. Omit to auto-bind all agent channels. Use an empty array [] to skip channel delivery.'
+        description: 'Optional. Channel IDs to deliver task results when not in a channel session.'
       },
       timeout_minutes: {
         type: 'number',
@@ -98,7 +130,8 @@ const NOTIFY_TOOL: Tool = {
       },
       channel_id: {
         type: 'string',
-        description: 'Optional: send to a specific channel only (omit to send to all notify-enabled channels)'
+        description:
+          'Optional channel ID. Omit in a channel session to notify this conversation; omit on desktop to broadcast all notify-enabled channels.'
       }
     },
     required: ['message']
@@ -210,11 +243,11 @@ const CONFIG_TOOL: Tool = {
 class ClawServer {
   public mcpServer: McpServer
   private agentId: string
-  private sourceChannelId: string | undefined
+  private source: ClawSourceContext | undefined
 
-  constructor(agentId: string, sourceChannelId?: string) {
+  constructor(agentId: string, source?: ClawSourceContext) {
     this.agentId = agentId
-    this.sourceChannelId = sourceChannelId
+    this.source = source
     this.mcpServer = new McpServer(
       {
         name: 'claw',
@@ -231,7 +264,7 @@ class ClawServer {
 
   private setupHandlers() {
     this.mcpServer.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [CRON_TOOL, NOTIFY_TOOL, CONFIG_TOOL]
+      tools: [buildCronTool(this.source), NOTIFY_TOOL, CONFIG_TOOL]
     }))
 
     this.mcpServer.server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -328,13 +361,7 @@ class ClawServer {
       scheduleValue = date.toISOString()
     }
 
-    // Resolve channel_ids: explicit array, or default to the current channel
-    let channelIds: string[] | undefined
-    if (Array.isArray(rawChannelIds)) {
-      channelIds = rawChannelIds
-    } else if (this.sourceChannelId) {
-      channelIds = [this.sourceChannelId]
-    }
+    const channelIds = this.resolveTaskChannelIds(rawChannelIds)
 
     const task = await taskService.createTask(this.agentId, {
       name,
@@ -342,13 +369,41 @@ class ClawServer {
       schedule_type: scheduleType,
       schedule_value: scheduleValue,
       timeout_minutes: timeoutMinutes && timeoutMinutes > 0 ? timeoutMinutes : undefined,
-      channel_ids: channelIds && channelIds.length > 0 ? channelIds : undefined
+      channel_ids: channelIds
     })
 
-    logger.info('Cron job created via tool', { agentId: this.agentId, taskId: task.id })
+    logger.info('Cron job created via tool', {
+      agentId: this.agentId,
+      taskId: task.id,
+      channelIds: task.channel_ids
+    })
     return {
       content: [{ type: 'text' as const, text: `Job created:\n${JSON.stringify(task, null, 2)}` }]
     }
+  }
+
+  /** In a channel session, always bind the current channel; ignore model [] / wrong IDs. */
+  private resolveTaskChannelIds(rawChannelIds: string[] | undefined): string[] | undefined {
+    if (this.source?.channelId) {
+      if (
+        !Array.isArray(rawChannelIds) ||
+        rawChannelIds.length === 0 ||
+        !rawChannelIds.includes(this.source.channelId)
+      ) {
+        logger.info('Cron add: using current channel for channel_ids', {
+          agentId: this.agentId,
+          channelId: this.source.channelId,
+          rawChannelIds
+        })
+      }
+      return [this.source.channelId]
+    }
+
+    if (Array.isArray(rawChannelIds) && rawChannelIds.length > 0) {
+      return rawChannelIds
+    }
+
+    return undefined
   }
 
   private async listJobs() {
@@ -370,8 +425,11 @@ class ClawServer {
     const targetChannelId = args.channel_id
     let adapters = channelManager.getAgentAdapters(this.agentId)
 
+    const sourceChannelId = this.source?.channelId
     if (targetChannelId) {
       adapters = adapters.filter((a) => a.channelId === targetChannelId)
+    } else if (sourceChannelId) {
+      adapters = adapters.filter((a) => a.channelId === sourceChannelId)
     }
 
     if (adapters.length === 0) {
@@ -389,7 +447,13 @@ class ClawServer {
     const errors: string[] = []
 
     for (const adapter of adapters) {
-      for (const chatId of adapter.notifyChatIds) {
+      const chatIds =
+        this.source?.chatId && adapter.channelId === this.source.channelId
+          ? adapter.notifyChatIds.includes(this.source.chatId)
+            ? [this.source.chatId]
+            : adapter.notifyChatIds
+          : adapter.notifyChatIds
+      for (const chatId of chatIds) {
         try {
           await adapter.sendMessage(chatId, message)
           sent++

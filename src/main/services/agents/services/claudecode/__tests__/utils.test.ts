@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { isDeepSeekOfficialHost, isMiMoOfficialHost, with1mContextSuffix } from '../utils'
+import {
+  buildChannelContext,
+  buildCurrentTimeContext,
+  formatRfc3339WithLocalOffset,
+  isDeepSeekOfficialHost,
+  isMiMoOfficialHost,
+  with1mContextSuffix
+} from '../utils'
 
 describe('isDeepSeekOfficialHost', () => {
   it('matches the canonical DeepSeek Anthropic endpoint', () => {
@@ -120,5 +127,45 @@ describe('with1mContextSuffix', () => {
   it('returns empty string when modelId is missing', () => {
     expect(with1mContextSuffix(undefined, deepSeekHost)).toBe('')
     expect(with1mContextSuffix('', deepSeekHost)).toBe('')
+  })
+})
+
+describe('formatRfc3339WithLocalOffset', () => {
+  it('formats local wall time with numeric offset', () => {
+    const date = new Date('2026-05-22T07:49:03.000Z')
+    const formatted = formatRfc3339WithLocalOffset(date)
+
+    expect(formatted).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
+    expect(new Date(formatted).getTime()).toBe(date.getTime())
+  })
+})
+
+describe('buildChannelContext', () => {
+  it('documents current channel and cron defaults', () => {
+    const context = buildChannelContext({
+      channelId: 'ch_abc',
+      channelType: 'wechat',
+      chatId: 'wx_user_1'
+    })
+
+    expect(context).toContain('## Current Channel')
+    expect(context).toContain('wechat')
+    expect(context).toContain('ch_abc')
+    expect(context).toContain('wx_user_1')
+    expect(context).toContain('channel_ids')
+    expect(context).toContain('ch_abc')
+  })
+})
+
+describe('buildCurrentTimeContext', () => {
+  it('includes local, timezone, and UTC timestamps', () => {
+    const now = new Date('2026-05-22T07:49:03.000Z')
+    const context = buildCurrentTimeContext(now)
+
+    expect(context).toContain('## Current Time')
+    expect(context).toContain('Now (UTC): 2026-05-22T07:49:03.000Z')
+    expect(context).toContain('- Timezone:')
+    expect(context).toMatch(/Now \(local\): \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}/)
+    expect(context).toContain('mcp__claw__cron')
   })
 })
